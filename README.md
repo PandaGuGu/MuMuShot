@@ -113,6 +113,15 @@ pip install pyinstaller pillow
 python tools/rebuild_exe.py
 ```
 
+程序自带一个自检入口，会检查依赖是否齐全、目录是否可写、日志能否落盘：
+
+```bash
+python mumu_shot.py --selftest
+```
+
+打 tag（`v1.0.0` 这样）推上来，GitHub Actions 会在 Windows runner 上自动构建、
+跑一遍自检、通过后把 exe 打包发布到 Releases —— 自检不过就不发布。
+
 ## 环境要求
 
 - Windows 10 / 11
