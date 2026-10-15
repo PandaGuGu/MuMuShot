@@ -82,6 +82,24 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: MuMuShot.zip
-          generate_release_notes: true
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: MuMuShot ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            把电脑屏幕截图一键送进 MuMu 模拟器相册。
+
+            ## 功能
+
+            - **四种截图方式**：自绘遮罩框选 / 调系统截图工具 / 全屏 / 直接上传剪贴板
+            - **四个全局热键**：`Ctrl+Alt+A` 框选、`Ctrl+Alt+Q` 系统截图、`Ctrl+Alt+S` 全屏、`Ctrl+Alt+C` 剪贴板，不用切窗口
+            - **自动找到模拟器**：三级端口发现，不硬编码，多开也能认出实例；模拟器开机中会自动等待
+            - **自动进相册**：推送后触发媒体库扫描，模拟器里的图库和微信立刻能选到
+
+            ## 使用
+
+            1. 解压后双击 `MuMuShot.exe`，**整个文件夹一起保留**（旁边的 `_internal` 是必需的）
+            2. 面板保持打开，按 `Ctrl+Alt+A` 框选要发的画面，自动进相册
+            3. 首次运行如遇 SmartScreen 提示，点「更多信息 → 仍要运行」
+
+            截图同时会在 exe 旁边的 `shots\` 里留一份，排错看 `mumu-tool.log`。
+
+            > 本包由 GitHub Actions 从源码构建，发布前已在 runner 上跑过 `--selftest` 自检。
