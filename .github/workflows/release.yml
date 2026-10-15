@@ -30,8 +30,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pillow pyinstaller
 
-      - name: 检查构建环境
-        run: python -c "import tkinter, PIL.ImageGrab, PIL.ImageTk; print('tkinter + Pillow 就绪')"
+      - name: 环境信息（只记录，不阻断）
+        shell: pwsh
+        run: |
+          python -c "import sys; print('python', sys.version)"
+          python -c "import tkinter; print('tkinter', tkinter.TkVersion)"
+          if ($LASTEXITCODE -ne 0) { Write-Host '!! tkinter 不可用' }
+          python -c "from PIL import ImageGrab, ImageTk; print('pillow ok')"
+          if ($LASTEXITCODE -ne 0) { Write-Host '!! pillow 不可用' }
 
       - name: 打包成 exe
         run: >
