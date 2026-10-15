@@ -1,0 +1,54 @@
+name: 构建并发布 exe
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布的标签名，例如 v1.0.1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow pyinstaller
+
+      - name: 打包成 exe
+        run: >
+          python -m PyInstaller --noconfirm --clean --onedir --noconsole
+          --name MuMuShot
+          --icon tools/shot.ico
+          --exclude-module cv2
+          --exclude-module numpy
+          --exclude-module matplotlib
+          --exclude-module scipy
+          --exclude-module pandas
+          mumu_shot.py
+
+      - name: 压缩发布包
+        run: Compress-Archive -Path dist\MuMuShot -DestinationPath MuMuShot.zip
+
+      - name: 创建 Release 并上传
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MuMuShot.zip
+          generate_release_notes: true
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: MuMuShot ${{ github.event.inputs.tag || github.ref_name }}
