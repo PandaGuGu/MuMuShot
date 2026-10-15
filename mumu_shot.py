@@ -699,6 +699,8 @@ def selftest() -> int:
     except Exception as e:
         log(f"  [!] 创建窗口失败（无桌面环境下属正常）：{e}")
     log("自检通过" if ok else "自检失败")
+    # 给 CI 留一个纯 ASCII 标记，避免日志匹配受编码影响
+    log("selftest ok" if ok else "selftest failed")
     return 0 if ok else 1
 
 

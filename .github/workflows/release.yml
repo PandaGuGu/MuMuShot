@@ -49,12 +49,23 @@ jobs:
         shell: pwsh
         run: |
           $exe = "dist\MuMuShot\MuMuShot.exe"
-          if (-not (Test-Path $exe)) { Write-Error "没有生成 exe"; exit 1 }
-          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Write-Error "exe 自检失败，退出码 $($p.ExitCode)"; exit 1 }
           $logfile = "dist\MuMuShot\mumu-tool.log"
-          if (-not (Test-Path $logfile)) { Write-Error "exe 没有写日志，可能没正常启动"; exit 1 }
-          Get-Content $logfile | Select-Object -Last 8
+          if (-not (Test-Path $exe)) { Write-Error "没有生成 exe"; exit 1 }
+
+          # 用日志内容做判据：无控制台 exe 的退出码在部分情况下拿不到，
+          # 不依赖它，改成等它把 ASCII 标记 selftest ok 写进日志。
+          Start-Process -FilePath $exe -ArgumentList "--selftest"
+          $done = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ((Test-Path $logfile) -and (Select-String -Path $logfile -Pattern "selftest ok" -Quiet)) {
+              $done = $true
+              break
+            }
+          }
+
+          if (Test-Path $logfile) { Get-Content $logfile } else { Write-Host "（没有生成日志文件）" }
+          if (-not $done) { Write-Error "exe 自检没有通过，不发布"; exit 1 }
           Remove-Item $logfile -ErrorAction SilentlyContinue
           Write-Host "exe 自检通过，可以发布"
 
