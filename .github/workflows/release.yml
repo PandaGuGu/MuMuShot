@@ -30,6 +30,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install pillow pyinstaller
 
+      - name: 检查构建环境
+        run: python -c "import tkinter, PIL.ImageGrab, PIL.ImageTk; print('tkinter + Pillow 就绪')"
+
       - name: 打包成 exe
         run: >
           python -m PyInstaller --noconfirm --clean --onedir --noconsole
@@ -41,6 +44,16 @@ jobs:
           --exclude-module scipy
           --exclude-module pandas
           mumu_shot.py
+
+      - name: 冒烟测试（确认打出来的 exe 真的能跑）
+        shell: pwsh
+        run: |
+          $exe = "dist\MuMuShot\MuMuShot.exe"
+          if (-not (Test-Path $exe)) { Write-Error "没有生成 exe"; exit 1 }
+          & $exe --list-windows
+          if ($LASTEXITCODE -ne 0) { Write-Error "exe 启动失败，退出码 $LASTEXITCODE"; exit 1 }
+          if (-not (Test-Path "dist\MuMuShot\mumu-tool.log")) { Write-Error "exe 没有正常运行（没写日志）"; exit 1 }
+          Write-Host "exe 可以正常运行，日志已生成"
 
       - name: 压缩发布包
         run: Compress-Archive -Path dist\MuMuShot -DestinationPath MuMuShot.zip
