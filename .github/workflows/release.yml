@@ -50,10 +50,13 @@ jobs:
         run: |
           $exe = "dist\MuMuShot\MuMuShot.exe"
           if (-not (Test-Path $exe)) { Write-Error "没有生成 exe"; exit 1 }
-          & $exe --list-windows
-          if ($LASTEXITCODE -ne 0) { Write-Error "exe 启动失败，退出码 $LASTEXITCODE"; exit 1 }
-          if (-not (Test-Path "dist\MuMuShot\mumu-tool.log")) { Write-Error "exe 没有正常运行（没写日志）"; exit 1 }
-          Write-Host "exe 可以正常运行，日志已生成"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "exe 自检失败，退出码 $($p.ExitCode)"; exit 1 }
+          $logfile = "dist\MuMuShot\mumu-tool.log"
+          if (-not (Test-Path $logfile)) { Write-Error "exe 没有写日志，可能没正常启动"; exit 1 }
+          Get-Content $logfile | Select-Object -Last 8
+          Remove-Item $logfile -ErrorAction SilentlyContinue
+          Write-Host "exe 自检通过，可以发布"
 
       - name: 压缩发布包
         run: Compress-Archive -Path dist\MuMuShot -DestinationPath MuMuShot.zip

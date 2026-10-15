@@ -675,6 +675,33 @@ def run_console(args) -> int:
 
 
 # --------------------------------------------------------------- CLI
+def selftest() -> int:
+    """自检：确认依赖都在、目录可写、日志能落盘。
+
+    打包成 exe 之后 CI 会先跑一遍这个，过不了就不发布 —— 免得发出去一个
+    起不来的程序。
+    """
+    ok = True
+    log(f"自检开始：Python {sys.version.split()[0]}，程序目录 {APP_DIR}")
+    for mod in ("tkinter", "PIL", "PIL.ImageGrab", "PIL.ImageTk"):
+        try:
+            __import__(mod)
+            log(f"  [√] {mod}")
+        except Exception as e:
+            log(f"  [x] {mod} 导入失败：{e}")
+            ok = False
+    try:
+        import tkinter
+        probe = tkinter.Tk()
+        probe.withdraw()
+        probe.destroy()
+        log("  [√] 能创建 tkinter 窗口")
+    except Exception as e:
+        log(f"  [!] 创建窗口失败（无桌面环境下属正常）：{e}")
+    log("自检通过" if ok else "自检失败")
+    return 0 if ok else 1
+
+
 def run_cli(args) -> int:
     up = Uploader(args)
     if not up.connect():
@@ -718,6 +745,7 @@ def main() -> int:
     ap.add_argument("--window", metavar="关键词", help="截取标题包含该关键词的窗口")
     ap.add_argument("--list-windows", action="store_true", help="列出所有窗口标题")
     ap.add_argument("--console", action="store_true", help="强制用控制台模式（无图形面板）")
+    ap.add_argument("--selftest", action="store_true", help="自检：验证依赖与日志功能后退出")
     ap.add_argument("--open-gallery", action="store_true", help="上传后自动在模拟器里打开图片")
     ap.add_argument("--hide-panel-on-shot", action="store_true", help="截图瞬间隐藏面板")
     ap.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR,
@@ -725,6 +753,9 @@ def main() -> int:
     ap.add_argument("--adb", default=None, help="手动指定 adb.exe 路径")
     ap.add_argument("--device", default=None, help="手动指定设备，如 127.0.0.1:7555")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     if args.list_windows:
         for hwnd, title, rect in list_windows():
