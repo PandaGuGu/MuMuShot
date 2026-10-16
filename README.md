@@ -30,9 +30,14 @@ flowchart LR
 
 ### 方式一：直接下 exe（推荐）
 
-到 [Releases](https://github.com/PandaGuGu/MuMuShot/releases) 下载 `MuMuShot.zip`，解压后双击 `MuMuShot.exe`。
+到 [Releases](https://github.com/PandaGuGu/MuMuShot/releases) 下载，**二选一**：
 
-> 整个文件夹要一起保留 —— 它旁边的 `_internal` 是必需的，不能只单独拷 exe。
+| 文件 | 版本 | 说明 |
+| --- | --- | --- |
+| **`MuMuShot-Rust.exe`** | Rust 版 | 单文件 5.8 MB，**免安装**，启动约快 2 倍 |
+| `MuMuShot.zip` | Python 版 | 解压后双击 `MuMuShot.exe`；**整个文件夹一起保留**，旁边的 `_internal` 是必需的，不能只单独拷 exe |
+
+两版功能、命令行参数、退出码、日志格式完全一致，可以混用。
 
 ### 方式二：从源码运行
 
@@ -165,8 +170,12 @@ cd python
 python mumu_shot.py --selftest
 ```
 
-打 tag（`v1.0.0` 这样）推上来，GitHub Actions 会在 Windows runner 上自动构建、
-跑一遍自检、通过后把 exe 打包发布到 Releases —— 自检不过就不发布。
+打 tag（`v1.1.0` 这样）推上来，GitHub Actions 会在 Windows runner 上同时构建两版并发到 Releases：
+
+- **Python 版** → 打包 `MuMuShot.zip`
+- **Rust 版** → 先跑单元测试、再编译，产出 `MuMuShot-Rust.exe`
+
+两个包发布前都会跑一遍 `--selftest` 自检（认日志里的 `selftest ok`），**任一环节不过就不发布**。也可以手动运行该 workflow 并填标签名来补发。
 
 ## 环境要求
 

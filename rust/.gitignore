@@ -1,1 +1,4 @@
 /target
+
+# 发布流程里给单文件 exe 改的名字（见 .github/workflows/release.yml）
+MuMuShot-Rust.exe

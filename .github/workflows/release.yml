@@ -1,4 +1,9 @@
-name: 构建并发布 exe
+name: 构建并发布
+
+# 两种触发方式：
+#   1. 推一个 v* 标签 —— 常规发布
+#   2. 手动运行（workflow_dispatch）并填标签名 —— 补发或重发
+# 两个版本都会编译、跑测试/自检；任一环节不过就不发布。
 
 on:
   push:
@@ -7,14 +12,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "发布的标签名，例如 v1.0.1"
+        description: "发布的标签名，例如 v1.1.0"
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  # ------------------------------------------------------------------ Python 版
+  python:
+    name: 打包 Python 版
     runs-on: windows-latest
     steps:
       - name: 检出代码
@@ -78,28 +85,134 @@ jobs:
       - name: 压缩发布包
         run: Compress-Archive -Path dist\MuMuShot -DestinationPath MuMuShot.zip
 
+      - name: 暂存发布包
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: MuMuShot.zip
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------- Rust 版
+  rust:
+    name: 构建 Rust 版
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # edition 2024，最低要 1.85；用 stable 即可
+      - name: 准备 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: 单元测试（纯逻辑，不需要模拟器）
+        run: cargo test --release
+
+      - name: 编译 release
+        run: cargo build --release
+
+      - name: 冒烟测试（确认打出来的 exe 真的能跑）
+        shell: pwsh
+        run: |
+          $exe = "target\release\MuMuShot.exe"
+          $logfile = "target\release\mumu-tool.log"
+          if (-not (Test-Path $exe)) { Write-Error "没有生成 exe"; exit 1 }
+
+          # 与 Python 版同一套判据：release 构建没有控制台，
+          # 所以等日志里出现 ASCII 标记 selftest ok
+          Start-Process -FilePath $exe -ArgumentList "--selftest"
+          $done = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ((Test-Path $logfile) -and (Select-String -Path $logfile -Pattern "selftest ok" -Quiet)) {
+              $done = $true
+              break
+            }
+          }
+
+          if (Test-Path $logfile) { Get-Content $logfile } else { Write-Host "（没有生成日志文件）" }
+          if (-not $done) { Write-Error "exe 自检没有通过，不发布"; exit 1 }
+          Remove-Item $logfile -ErrorAction SilentlyContinue
+          Write-Host "exe 自检通过，可以发布"
+
+      - name: 整理发布文件
+        run: Copy-Item target\release\MuMuShot.exe MuMuShot-Rust.exe
+
+      - name: 暂存发布文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-binary
+          # 注意：这个路径相对仓库根目录，不受上面的 working-directory 影响
+          path: rust/MuMuShot-Rust.exe
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------- 发布
+  release:
+    name: 发布到 Releases
+    needs: [python, rust]
+    runs-on: windows-latest
+    steps:
+      - name: 取回两个发布包
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 确认待发布文件都在
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse dist -File | Select-Object FullName, Length
+          foreach ($f in @("dist\python-package\MuMuShot.zip", "dist\rust-binary\MuMuShot-Rust.exe")) {
+            if (-not (Test-Path $f)) { Write-Error "缺少发布文件：$f"; exit 1 }
+          }
+
       - name: 创建 Release 并上传
         uses: softprops/action-gh-release@v2
         with:
-          files: MuMuShot.zip
+          fail_on_unmatched_files: true
+          files: |
+            dist/python-package/MuMuShot.zip
+            dist/rust-binary/MuMuShot-Rust.exe
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: MuMuShot ${{ github.event.inputs.tag || github.ref_name }}
           body: |
-            把电脑屏幕截图一键送进 MuMu 模拟器相册。
+            把电脑屏幕截图一键送进 MuMu 模拟器相册。提供两个版本，**二选一即可**。
+
+            ## 下载哪个
+
+            | 文件 | 版本 | 说明 |
+            | --- | --- | --- |
+            | `MuMuShot-Rust.exe` | Rust 版 | **单文件 5.8 MB，免安装**，启动约快 2 倍，面板秒开 |
+            | `MuMuShot.zip` | Python 版 | 解压后**整个文件夹一起保留**（旁边的 `_internal` 是必需的，不能只单独拷 exe） |
+
+            两版的功能、命令行参数、退出码、日志格式、截图动作完全一致，可以混用。
 
             ## 功能
 
             - **四种截图方式**：自绘遮罩框选 / 调系统截图工具 / 全屏 / 直接上传剪贴板
             - **四个全局热键**：`Ctrl+Alt+A` 框选、`Ctrl+Alt+Q` 系统截图、`Ctrl+Alt+S` 全屏、`Ctrl+Alt+C` 剪贴板，不用切窗口
-            - **自动找到模拟器**：三级端口发现，不硬编码，多开也能认出实例；模拟器开机中会自动等待
+            - **自动找到模拟器**：不硬编码端口，按准确度依次问 MuMuManager、扫进程监听端口、常见端口兜底；多开也能认出实例，模拟器开机中会自动等待
             - **自动进相册**：推送后触发媒体库扫描，模拟器里的图库和微信立刻能选到
 
             ## 使用
 
-            1. 解压后双击 `MuMuShot.exe`，**整个文件夹一起保留**（旁边的 `_internal` 是必需的）
+            1. 运行 `MuMuShot-Rust.exe`（Rust 版），或解压后双击 `MuMuShot.exe`（Python 版）
             2. 面板保持打开，按 `Ctrl+Alt+A` 框选要发的画面，自动进相册
             3. 首次运行如遇 SmartScreen 提示，点「更多信息 → 仍要运行」
 
-            截图同时会在 exe 旁边的 `shots\` 里留一份，排错看 `mumu-tool.log`。
+            截图同时会在程序旁边的 `shots\` 里留一份，排错看 `mumu-tool.log`。
 
-            > 本包由 GitHub Actions 从源码构建，发布前已在 runner 上跑过 `--selftest` 自检。
+            ## 本次更新
+
+            - 新增 **Rust 重写版**（`MuMuShot-Rust.exe`）：单文件免安装，体积小 6.7 倍，启动快约 1.9 倍。完整评测见仓库 `docs/性能评测报告.md`
+            - 修掉自动识别链路的一处真实缺陷：端口嗅探会把 MuMu 其他进程占用的 RPC 端口当成候选，而 `adb connect` 打到这类端口要等约 10 秒才失败，最坏可白等约 48 秒。现在候选先按进程身份筛，**在调用 adb 之前**就剔除无关端口
+            - **模拟器未启动时的失败路径从 7.3 秒压到 0.53 秒**（两版同步）；报错文案也从"没检测到运行中的 MuMu 实例"改成与实际一致的"MuMu 模拟器没在运行"
+            - 猜来的端口改用 2 秒短握手超时，并把「取 Android 版本号 + 探目标存储可用」合并进同一次 adb 调用 —— 判定更严，但不增加任何一次往返
+
+            > 两个包都由 GitHub Actions 从源码构建；发布前已分别跑过单元测试与 `--selftest` 自检，不过就不发布。
