@@ -46,6 +46,14 @@ const ADB_LIKELY_PORTS: &[&str] = &[
     "7555", "16384", "5555", "21503", "21513", "62001", "62025", "62026", "5554",
 ];
 
+/// 猜来的端口（进程嗅探 / 常见端口兜底）可能指向任意服务：
+/// 真 adb 端口是毫秒级应答，非 adb 端口会一直等到握手超时（实测约 10 秒），
+/// 所以只给它很短的窗口，超时就立刻换下一个。
+const CONNECT_TIMEOUT_GUESS: Duration = Duration::from_secs(2);
+
+/// 权威来源（手动指定、MuMuManager 报出的 adb_port）不容易错，握手给足时间。
+const CONNECT_TIMEOUT_TRUSTED: Duration = Duration::from_secs(6);
+
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 static LAST_DEVICE_DESC: Mutex<String> = Mutex::new(String::new());
 
@@ -225,13 +233,18 @@ pub fn mumu_instances() -> Vec<Map<String, Value>> {
     };
     map.into_values()
         .filter_map(|v| match v {
-            Value::Object(m) if m.get("adb_port").is_some() => Some(m),
+            // 注意：实例没启动时 MuMuManager 不返回 adb_port 字段，这里不能就此
+            // 当成"没有实例"，否则会白跑一轮端口嗅探和常见端口猜测（实测多花 6~9 秒）。
+            Value::Object(m) if m.contains_key("index") || m.contains_key("name") => Some(m),
             _ => None,
         })
         .collect()
 }
 
 /// 没有任何配置可读时，直接看 MuMu 进程在监听哪些本地端口。
+///
+/// 只交出"证据充分"的端口：客户机进程持有的全收，其它 MuMu 进程持有的必须是
+/// 常用 adb 端口，免得为无关服务白花掉每个 2 秒的握手等待。
 pub fn mumu_ports_from_processes() -> Vec<String> {
     let (rc, out) = run_strs(
         &["tasklist", "/FO", "CSV", "/NH"],
@@ -301,18 +314,41 @@ pub fn mumu_ports_from_processes() -> Vec<String> {
         found
     };
 
-    // 虚拟机进程持有的端口最可能是 adb，优先；找不到再看 MuMu 的其他进程
-    let vm_ports = collect(&vm_pids);
-    let mut ports = vm_ports.clone();
-    for p in collect(&other_pids) {
-        if !ports.contains(&p) {
-            ports.push(p);
+    // 客户机进程（MuMuNxDevice.exe 等）持有的本地端口就是模拟器的 adb 端口，全部要。
+    // 其余 MuMu 进程（远程服务、主控等）持有的大多是自家 RPC 端口，连上去只会白等
+    // 握手超时，所以只保留"确实长在常用 adb 端口表里"的那几个。
+    let (ports, dropped) = pick_sniffed_ports(&collect(&vm_pids), &collect(&other_pids));
+    if !dropped.is_empty() {
+        core::log(&format!(
+            "    端口嗅探：跳过 {} 个非 adb 端口（{}）",
+            dropped.len(),
+            dropped.join(",")
+        ));
+    }
+    ports
+}
+
+/// 从嗅探到的端口里挑出「值得花一次 adb 往返去验证」的候选。
+///
+/// `vm` 来自客户机进程，全收；`other` 来自其它 MuMu 进程，只有本身就长在常用
+/// adb 端口表里的才留。返回 (候选端口, 被跳过的端口)。
+fn pick_sniffed_ports(vm: &[String], other: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut ports: Vec<String> = vm.to_vec();
+    let mut dropped: Vec<String> = Vec::new();
+    for p in other {
+        if ports.contains(p) {
+            continue;
+        }
+        if ADB_LIKELY_PORTS.contains(&p.as_str()) {
+            ports.push(p.clone());
+        } else {
+            dropped.push(p.clone());
         }
     }
-    // 同类里先试"长得像 adb"的端口，免得先去连渲染/控制端口白等握手超时
+    // 先试"长得像 adb"的端口，免得先去连渲染/控制端口白等握手超时
     ports.sort_by_key(|p| !ADB_LIKELY_PORTS.contains(&p.as_str()));
     ports.truncate(8);
-    ports
+    (ports, dropped)
 }
 
 // -------------------------------------------------------------------- 选设备
@@ -337,10 +373,10 @@ fn as_str(v: Option<&Value>) -> Option<String> {
 }
 
 /// 试着连一个序列号；连得上返回 true。
-fn try_serial(adb: &str, serial: &str, boot_retry: u32) -> bool {
+fn try_serial(adb: &str, serial: &str, boot_retry: u32, connect_timeout: Duration) -> bool {
     if serial.contains(':') {
         // 连真实 adb 端口是毫秒级；连到非 adb 端口会等握手超时，所以别给太长
-        let _ = run_strs(&[adb, "connect", serial], Duration::from_secs(6));
+        let _ = run_strs(&[adb, "connect", serial], connect_timeout);
     }
     for i in 0..=boot_retry {
         let (rc, out) = run_strs(
@@ -358,6 +394,42 @@ fn try_serial(adb: &str, serial: &str, boot_retry: u32) -> bool {
     false
 }
 
+/// 探测一个"猜来的"端口（进程嗅探 / 常见端口兜底）是否真的能当收图设备用。
+///
+/// 与 `try_serial` 的区别有两点：
+///   1. `adb connect` 用短超时，非 adb 端口不会拖住整个流程；
+///   2. 判定更严——在一次 shell 里同时取 Android 版本号并确认目标存储存在，
+///      所以收紧判定不会多出任何一次 adb 往返。
+fn probe_guessed_serial(adb: &str, serial: &str) -> bool {
+    let _ = run_strs(&[adb, "connect", serial], CONNECT_TIMEOUT_GUESS);
+
+    // 一条命令干两件事：拿版本号（证明是 Android）+ 探存储（证明图能真的落进去）
+    let (rc, out) = run_strs(
+        &[
+            adb,
+            "-s",
+            serial,
+            "shell",
+            "getprop ro.build.version.release; test -d /sdcard/Pictures && echo MUMSHOT_SD_OK",
+        ],
+        Duration::from_secs(12),
+    );
+    if rc != 0 {
+        return false;
+    }
+    let low = out.to_lowercase();
+    if low.contains("error") || low.contains("offline") {
+        return false;
+    }
+
+    // 版本号那一行必须是数字开头（MuMu 报到的是 "15"），避免把别的东西看成版本
+    let has_android = out.lines().any(|l| {
+        let t = l.trim();
+        t.chars().next().is_some_and(|c| c.is_ascii_digit())
+    });
+    has_android && out.contains("MUMSHOT_SD_OK")
+}
+
 /// 自动找到正在运行的 MuMu 实例并连上它。
 ///
 /// 识别顺序（越靠前越准确）：
@@ -365,11 +437,14 @@ fn try_serial(adb: &str, serial: &str, boot_retry: u32) -> bool {
 ///   2. MuMuManager 报出的实例 adb 端口（最准，还能区分多开实例）
 ///   3. 扫 MuMu 进程实际监听的本地端口（不依赖任何配置，也不猜端口号）
 ///   4. 常见端口 / adb devices 兜底
+///
+/// 第 3、4 级是"猜"出来的，所以既用短握手超时兜住最坏耗时，又要求探到的设备
+/// 确实是带可用存储的安卓设备（见 `probe_guessed_serial`）。
 pub fn pick_device(adb: &str, wanted: Option<&str>) -> Option<String> {
     set_last_error("");
 
     if let Some(w) = wanted.filter(|s| !s.is_empty()) {
-        if try_serial(adb, w, 3) {
+        if try_serial(adb, w, 3, CONNECT_TIMEOUT_TRUSTED) {
             set_last_device_desc(&format!("{w}（手动指定）"));
             return Some(w.to_string());
         }
@@ -380,7 +455,11 @@ pub fn pick_device(adb: &str, wanted: Option<&str>) -> Option<String> {
     let instances = mumu_instances();
 
     // 1) MuMuManager 报的端口：已启动的实例优先，并容忍它还在开机
-    let mut ordered = instances.clone();
+    let mut ordered: Vec<Map<String, Value>> = instances
+        .iter()
+        .filter(|m| m.get("adb_port").is_some())
+        .cloned()
+        .collect();
     ordered.sort_by(|a, b| {
         let ka = (
             !truthy(a.get("is_android_started")),
@@ -403,7 +482,7 @@ pub fn pick_device(adb: &str, wanted: Option<&str>) -> Option<String> {
         } else {
             0
         };
-        if try_serial(adb, &serial, retry) {
+        if try_serial(adb, &serial, retry, CONNECT_TIMEOUT_TRUSTED) {
             let idx = as_str(item.get("index")).unwrap_or_default();
             let name = as_str(item.get("name")).unwrap_or_else(|| "MuMu".to_string());
             set_last_device_desc(&format!("{serial}（实例 {idx}「{name}」）"));
@@ -411,13 +490,14 @@ pub fn pick_device(adb: &str, wanted: Option<&str>) -> Option<String> {
         }
     }
 
-    // 2) 扫 MuMu 进程实际监听的端口
+    // 2) 扫 MuMu 进程实际监听的端口（候选已在嗅探阶段按进程身份筛过一轮）
     for port in mumu_ports_from_processes() {
         let serial = format!("127.0.0.1:{port}");
-        if try_serial(adb, &serial, 0) {
+        if probe_guessed_serial(adb, &serial) {
             set_last_device_desc(&format!("{serial}（从 MuMu 进程的监听端口里找到）"));
             return Some(serial);
         }
+        core::log(&format!("    {serial} 不是可用的安卓设备，跳过"));
     }
 
     // 3) MuMuManager 明确知道实例状态时，不用再猜常见端口了（省好几秒）
@@ -428,7 +508,7 @@ pub fn pick_device(adb: &str, wanted: Option<&str>) -> Option<String> {
 
     // 4) 最后才试常见端口 / adb devices
     for serial in DEVICE_CANDIDATES {
-        if try_serial(adb, serial, 0) {
+        if probe_guessed_serial(adb, serial) {
             set_last_device_desc(serial);
             return Some(serial.to_string());
         }
@@ -617,4 +697,79 @@ pub fn push_photo(adb: &str, serial: &str, local: &str, remote_dir: &str, open_g
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 客户机进程持有的端口全部留下；其它 MuMu 进程持有的高位数端口必须丢掉。
+    /// 这些高位数端口正是 MuMuRemoteBackend 自家的 RPC 端口，连上去要白等约 10 秒。
+    #[test]
+    fn 非客户机进程的高位端口不进候选() {
+        let vm = v(&["5555", "7555", "16384"]);
+        let other = v(&["37640", "45582", "16384"]);
+        let (kept, dropped) = pick_sniffed_ports(&vm, &other);
+
+        assert!(kept.contains(&"16384".to_string()));
+        assert!(kept.contains(&"5555".to_string()));
+        // 37640 / 45582 只被非客户机进程持有，且不在常用 adb 端口表里 → 丢掉
+        assert!(!kept.contains(&"37640".to_string()));
+        assert!(!kept.contains(&"45582".to_string()));
+        assert_eq!(dropped, v(&["37640", "45582"]));
+        // 非客户机进程重复持有的端口不重复入列
+        assert_eq!(kept.len(), 3);
+    }
+
+    /// 非客户机进程若持有的是常用 adb 端口，仍然保留（兼容老版本 MuMu 的进程划分）。
+    #[test]
+    fn 非客户机进程的常用端口仍保留() {
+        let (kept, dropped) = pick_sniffed_ports(&v(&[]), &v(&["21503", "37640"]));
+        assert_eq!(kept, v(&["21503"]));
+        assert_eq!(dropped, v(&["37640"]));
+    }
+
+    /// 候选上限与"像 adb 的端口优先"两条约束都要保持。
+    #[test]
+    fn 候选去重限八个且常用端口优先() {
+        // 客户机进程持有的端口会全部保留，这里造 12 个把上限撑出来
+        let many: Vec<String> = (0..12).map(|i| format!("{}", 30000 + i)).collect();
+        let (kept, _) = pick_sniffed_ports(&many, &v(&["16384"]));
+        assert_eq!(kept.len(), 8, "候选数量要截到 8 个");
+        assert_eq!(kept[0], "16384", "常用 adb 端口要排在最先试");
+        let unique: std::collections::HashSet<_> = kept.iter().collect();
+        assert_eq!(unique.len(), kept.len(), "候选不能重复");
+    }
+
+    // 下面两个要真机环境（adb + 运行中的 MuMu），默认不跑：
+    //   cargo test --release -- --ignored --nocapture
+    #[test]
+    #[ignore = "需要 adb 与运行中的 MuMu 模拟器"]
+    fn 真机_真实adb端口能被接受() {
+        let adb = find_adb(None).expect("找不到 adb");
+        let (started, out) = {
+            let t = Instant::now();
+            let ok = probe_guessed_serial(&adb, "127.0.0.1:16384");
+            (ok, t.elapsed())
+        };
+        println!("16384 判定={started}，耗时={:?}", out);
+        assert!(started, "16384 应当被接受");
+    }
+
+    #[test]
+    #[ignore = "需要 adb 与运行中的 MuMu（且非 adb 端口在监听）"]
+    fn 真机_非adb端口被快速拒绝() {
+        let adb = find_adb(None).expect("找不到 adb");
+        let ports = mumu_ports_from_processes();
+        println!("嗅探到候选：{ports:?}");
+        for p in &ports {
+            let t = Instant::now();
+            let ok = probe_guessed_serial(&adb, &format!("127.0.0.1:{p}"));
+            println!("  {p} 判定={ok}，耗时={:?}", t.elapsed());
+        }
+    }
 }

@@ -16,7 +16,7 @@ MuMu 模拟器（以及大多数安卓模拟器）都没有"从电脑取图"的�
 ```bash
 cd rust
 cargo build --release
-# 产物：rust/target/release/MuMuShot.exe（单文件 5.82 MB，无外部依赖）
+# 产物：rust/target/release/MuMuShot.exe（单文件 5.83 MB，无外部依赖）
 ```
 
 需要 Rust 1.85+（用到 edition 2024）。**仅支持 Windows。**
@@ -93,6 +93,10 @@ MuMuShot.exe --selftest                  自检后退出
   `msyh.ttc`（微软雅黑）作为首选字体。
 - **adb 参数**：`adb push` 的目标始终传**完整远端路径**；同时把工作目录切到截图目录、
   只传相对文件名，彻底避开非 ASCII 路径下 adb 推导文件名出错的问题。
+- **设备识别不花时间也不猜**：识别顺序与 Python 版逐行对齐（MuMuManager → 客户端进程
+  监听端口 → 常见端口 → `adb devices`）。后两级属于"猜"，所以候选先按进程身份筛（只收
+  客户机进程持有的端口），再用 2 秒短握手超时兜住最坏耗时，判定时把「取 Android 版本号
+  + 探 `/sdcard/Pictures`」合并进同一次 `adb shell` —— 判定更严但不增加任何往返。
 
 ## 性能
 
@@ -100,14 +104,22 @@ MuMuShot.exe --selftest                  自检后退出
 
 | 指标 | Python 版 | Rust 版 |
 | --- | ---: | ---: |
-| 发行体积 | 39.29 MB / 996 文件 | **5.82 MB / 1 文件** |
-| `--selftest` 纯启动 | 279 ms | **137 ms** |
-| 面板可见 | 602 ms | **45 ms** |
-| `--full` 端到端 | 3128 ms | **2858 ms** |
-| 面板常驻内存 | **35.0 MB** | 99.0 MB |
+| 发行体积 | 39.29 MB / 996 文件 | **5.83 MB / 1 文件** |
+| `--selftest` 纯启动 | 234 ms | **123 ms** |
+| 面板可见 | 762 ms | **45 ms** |
+| `--full` 端到端 | 2867 ms | **2738 ms** |
+| 自动识别设备开销 | 149 ms | 170 ms |
+| 面板常驻内存 | **37.3 MB** | 98.5 MB |
 
-端到端只快 9%，因为耗时主要花在 adb 进程往返与模拟器媒体库索引上，与语言无关。
+端到端只快 5%，因为耗时主要花在 adb 进程往返与模拟器媒体库索引上，与语言无关。
 内存方面 Rust 反而更高：egui/OpenGL 渲染栈加上进程内加载的完整中文字体（约 19 MB）。
+
+## 测试
+
+```bash
+cargo test --release                            # 候选筛选等纯逻辑，随时可跑
+cargo test --release -- --ignored --nocapture   # 真机：逐个候选端口的判定与耗时（需 adb + 运行中的模拟器）
+```
 
 ## 目录
 

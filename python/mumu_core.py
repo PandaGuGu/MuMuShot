@@ -65,6 +65,15 @@ MUMU_VM_PROC_HINTS = ("device", "player", "headless", "nemu")
 ADB_LIKELY_PORTS = {"7555", "16384", "5555", "21503", "21513", "62001", "62025", "62026", "5554"}
 
 
+# 猜来的端口（进程嗅探 / 常见端口兜底）可能指向任意服务：真 adb 端口是毫秒级应答，
+# 非 adb 端口会一直耗到握手超时（实测约 10 秒），所以只给它很短的窗口。
+CONNECT_TIMEOUT_GUESS = 2
+
+
+# 权威来源（手动指定、MuMuManager 报出的 adb_port）不容易错，握手给足时间。
+CONNECT_TIMEOUT_TRUSTED = 6
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -164,13 +173,37 @@ def mumu_instances() -> list[dict]:
         return []
     if not isinstance(data, dict):
         return []
-    return [v for v in data.values() if isinstance(v, dict) and v.get("adb_port")]
+    # 注意：实例没启动时 MuMuManager 不返回 adb_port 字段，这里不能就此当成
+    # "没有实例"，否则会白跑一轮端口嗅探和常见端口猜测（实测多花 6~9 秒）。
+    return [v for v in data.values() if isinstance(v, dict) and ("index" in v or "name" in v)]
+
+
+def pick_sniffed_ports(vm: list[str], other: list[str]) -> tuple[list[str], list[str]]:
+    """从嗅探到的端口里挑出「值得花一次 adb 往返去验证」的候选。
+
+    vm 来自客户机进程，全收；other 来自其它 MuMu 进程，只有本身就长在常用 adb
+    端口表里的才留。返回 (候选端口, 被跳过的端口)。
+    """
+    ports = list(vm)
+    dropped = []
+    for p in other:
+        if p in ports:
+            continue
+        if p in ADB_LIKELY_PORTS:
+            ports.append(p)
+        else:
+            dropped.append(p)
+    # 先试"长得像 adb"的端口，免得先去连 MuMu 的渲染/控制端口白等握手超时
+    ports.sort(key=lambda p: (p not in ADB_LIKELY_PORTS,))
+    return ports[:8], dropped
 
 
 def mumu_ports_from_processes() -> list[str]:
     """没有任何配置可读时，直接看 MuMu 进程在监听哪些本地端口。
 
     这样即使 MuMuManager 不在（老版本）或者配置读不到，也不用去猜端口号。
+    只交出"证据充分"的端口：客户机进程持有的一律收下，其它 MuMu 进程持有的必须
+    本身就是常用 adb 端口，免得为无关服务白花掉每个 2 秒的握手等待。
     """
     rc, out = run(["tasklist", "/FO", "CSV", "/NH"], timeout=20)
     if rc != 0:
@@ -211,13 +244,40 @@ def mumu_ports_from_processes() -> list[str]:
                 found.append(port)
         return found
 
-    # 虚拟机进程持有的端口最可能是 adb，优先；找不到再看 MuMu 的其他进程
-    vm_ports = collect(vm_pids)
-    ports = vm_ports + [p for p in collect(other_pids) if p not in vm_ports]
-    # 同类里先试"长得像 adb"的端口（各家模拟器的常用端口），
-    # 免得先去连 MuMu 的渲染/控制端口、白等好几秒握手超时
-    ports.sort(key=lambda p: (p not in ADB_LIKELY_PORTS,))
-    return ports[:8]
+    # 客户机进程（MuMuNxDevice.exe 等）持有的本地端口就是模拟器的 adb 端口，全部要。
+    # 其余 MuMu 进程（远程服务、主控等）持有的大多是自家 RPC 端口，连上去只会白等
+    # 握手超时，所以只保留"确实长在常用 adb 端口表里"的那几个。
+    ports, dropped = pick_sniffed_ports(collect(vm_pids), collect(other_pids))
+    if dropped:
+        log(f"    端口嗅探：跳过 {len(dropped)} 个非 adb 端口（{','.join(dropped)}）")
+    return ports
+
+
+def probe_guessed_serial(adb: str, serial: str) -> bool:
+    """探测一个"猜来的"端口（进程嗅探 / 常见端口兜底）是否真的能当收图设备用。
+
+    与 try_serial 的区别有两点：
+      1. adb connect 用短超时，非 adb 端口不会拖住整个流程；
+      2. 判定更严 —— 在一次 shell 里同时取 Android 版本号并确认目标存储存在，
+         所以收紧判定不会多出任何一次 adb 往返。
+    """
+    run([adb, "connect", serial], timeout=CONNECT_TIMEOUT_GUESS)
+
+    # 一条命令干两件事：拿版本号（证明是 Android）+ 探存储（证明图能真的落进去）
+    rc, out = run(
+        [adb, "-s", serial, "shell",
+         "getprop ro.build.version.release; test -d /sdcard/Pictures && echo MUMSHOT_SD_OK"],
+        timeout=12,
+    )
+    if rc != 0:
+        return False
+    low = out.lower()
+    if "error" in low or "offline" in low:
+        return False
+
+    # 版本号那一行必须是数字开头（MuMu 报到的是 "15"），避免把别的东西看成版本
+    has_android = any(line.strip()[:1].isdigit() for line in out.splitlines())
+    return has_android and "MUMSHOT_SD_OK" in out
 
 
 def pick_device(adb: str, wanted: str | None = None) -> str | None:
@@ -228,13 +288,17 @@ def pick_device(adb: str, wanted: str | None = None) -> str | None:
       2. MuMuManager 报出的实例 adb 端口（最准，还能区分多开实例）
       3. 扫 MuMu 进程实际监听的本地端口（不依赖任何配置，也不猜端口号）
       4. 常见端口 / adb devices 兜底
+
+    第 3、4 级是"猜"出来的，所以既用短握手超时兜住最坏耗时，又要求探到的设备
+    确实是带可用存储的安卓设备（见 probe_guessed_serial）。
     """
     global LAST_ERROR, LAST_DEVICE_DESC
 
-    def try_serial(serial: str, boot_retry: int = 0) -> bool:
+    def try_serial(serial: str, boot_retry: int = 0,
+                   connect_timeout: int = CONNECT_TIMEOUT_TRUSTED) -> bool:
         if ":" in serial:
             # 连真实 adb 端口是毫秒级；连到非 adb 端口会等握手超时，所以别给太长
-            run([adb, "connect", serial], timeout=6)
+            run([adb, "connect", serial], timeout=connect_timeout)
         for i in range(boot_retry + 1):
             rc, out = run([adb, "-s", serial, "shell", "getprop", "ro.build.version.release"],
                           timeout=12)
@@ -255,8 +319,9 @@ def pick_device(adb: str, wanted: str | None = None) -> str | None:
     instances = mumu_instances()
 
     # 1) MuMuManager 报的端口：已启动的实例优先，并容忍它还在开机
-    ordered = sorted(instances, key=lambda i: (not i.get("is_android_started"),
-                                               str(i.get("index", "0"))))
+    ordered = sorted([i for i in instances if i.get("adb_port")],
+                     key=lambda i: (not i.get("is_android_started"),
+                                    str(i.get("index", "0"))))
     for item in ordered:
         host = item.get("adb_host_ip") or "127.0.0.1"
         serial = f"{host}:{item['adb_port']}"
@@ -266,12 +331,13 @@ def pick_device(adb: str, wanted: str | None = None) -> str | None:
             LAST_DEVICE_DESC = f"{serial}（实例 {idx}「{name}」）"
             return serial
 
-    # 2) 扫 MuMu 进程实际监听的端口
+    # 2) 扫 MuMu 进程实际监听的端口（候选已在嗅探阶段按进程身份筛过一轮）
     for port in mumu_ports_from_processes():
         serial = f"127.0.0.1:{port}"
-        if try_serial(serial):
+        if probe_guessed_serial(adb, serial):
             LAST_DEVICE_DESC = f"{serial}（从 MuMu 进程的监听端口里找到）"
             return serial
+        log(f"    {serial} 不是可用的安卓设备，跳过")
 
     # 3) MuMuManager 明确知道实例状态时，不用再猜常见端口了（省好几秒）
     if instances:
@@ -280,7 +346,7 @@ def pick_device(adb: str, wanted: str | None = None) -> str | None:
 
     # 4) 最后才试常见端口 / adb devices
     for serial in DEVICE_CANDIDATES:
-        if try_serial(serial):
+        if probe_guessed_serial(adb, serial):
             LAST_DEVICE_DESC = serial
             return serial
 
