@@ -1,0 +1,20 @@
+[
+  {
+    "impl": "Python",
+    "ready_ms": 602,
+    "ws_mb": 35.0,
+    "private_mb": 19.6,
+    "peak_ws_mb": 35.0,
+    "threads": 6,
+    "handles": 169
+  },
+  {
+    "impl": "Rust",
+    "ready_ms": 45,
+    "ws_mb": 99.0,
+    "private_mb": 62.7,
+    "peak_ws_mb": 99.9,
+    "threads": 13,
+    "handles": 276
+  }
+]

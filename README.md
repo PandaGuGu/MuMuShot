@@ -24,6 +24,7 @@ flowchart LR
 - **自动找到模拟器** —— 不写死 adb 端口，自动识别实例并连接；模拟器正在开机时会自动等待
 - **自动进相册** —— 推送后触发 MediaStore 扫描，图库/微信/抖音立刻能选到这张图
 - **本机留档** —— 每张截图在本机也存一份，方便回溯
+- **另有 Rust 版** —— `rust/` 是功能对齐的重写，单文件免安装，启动快 2 倍（见下）
 
 ## 快速开始
 
@@ -104,7 +105,37 @@ tools/
   rebuild_exe.py      一键重新打包成 exe
   rebuild-exe.bat     Windows 下双击重新打包
   shot.ico/.png       图标
+rust/                 Rust 重写版（见下）
+docs/性能评测报告.md    Python 版与 Rust 版的性能对比评测
+bench/                评测脚本（耗时 / 内存 / 交互验证）
 ```
+
+## Rust 版
+
+`rust/` 是同一功能的 **Rust 重写**，逐行对照 `mumu_shot.py` / `mumu_core.py` 移植：
+CLI 参数、退出码、日志文案、本机留档命名全部对齐，另外补上了图形面板与全局热键。
+
+```bash
+cd rust
+cargo build --release      # 产物：rust/target/release/MuMuShot.exe（单文件，免安装）
+```
+
+用法与 Python 版完全一致（`--full` / `--region` / `--snip` / `--clipboard` / `--window`
+/ `--list-windows` / `--console` / `--selftest`），详见 [`rust/README.md`](rust/README.md)。
+
+**实测对比**（同一台机器、同一个模拟器实例，n=9 取中位数）：
+
+| 指标 | Python 版 | Rust 版 |
+| --- | ---: | ---: |
+| 发行体积 | 39.29 MB / 996 个文件 | **5.82 MB / 1 个文件** |
+| `--selftest` 纯启动 | 279 ms | **137 ms** |
+| 面板可见 | 602 ms | **45 ms** |
+| `--full` 端到端上传 | 3128 ms | **2858 ms** |
+| 面板常驻内存 | **35.0 MB** | 99.0 MB |
+
+端到端只快 9%，因为耗时主要花在 adb 进程往返与模拟器媒体库索引上，与语言无关。
+内存方面 Rust 反而更高（egui/OpenGL 渲染栈 + 进程内加载完整中文字体）。
+完整口径、原始数据与已知局限见 [`docs/性能评测报告.md`](docs/性能评测报告.md)。
 
 重新打包（改完代码后）：
 

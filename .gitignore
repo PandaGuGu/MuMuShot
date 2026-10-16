@@ -8,6 +8,14 @@ dist/
 dist_dir/
 *.spec
 
+# 本地打出来的 exe（含它必需的 _internal 目录），发布走 Release 不走仓库
+MuMuShot.exe
+_internal/
+
+# Rust 构建产物
+rust/target/
+rust/**/shots/
+
 # 运行时数据（截图、照片、日志）
 shots/
 photos/

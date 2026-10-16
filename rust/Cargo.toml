@@ -1,0 +1,44 @@
+[package]
+name = "mumushot"
+version = "0.1.0"
+edition = "2024"
+description = "截电脑屏幕 → 送进 MuMu 模拟器相册（Rust 版）"
+
+[[bin]]
+name = "MuMuShot"
+path = "src/main.rs"
+
+[dependencies]
+arboard = "3.7.0"
+chrono = "0.4"
+clap = { version = "4.6.7", features = ["derive"] }
+# 只用 glow 渲染后端，关掉 wgpu / accesskit，二进制小一半
+eframe = { version = "0.37.0", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "clipboard",
+] }
+global-hotkey = "0.9.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
+serde_json = "1.0.154"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
