@@ -13,6 +13,9 @@ MuMu 模拟器（以及大多数安卓模拟器）都没有"从电脑取图"的�
 
 ## 编译
 
+不想自己编的话，去 [Releases](https://github.com/PandaGuGu/MuMuShot/releases) 直接下
+`MuMuShot-Rust.exe`（单文件，免安装）。
+
 ```bash
 cd rust
 cargo build --release

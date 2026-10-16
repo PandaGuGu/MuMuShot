@@ -92,8 +92,9 @@ python tools/rebuild_exe.py
 
 也可以双击 `tools/rebuild-exe.bat`。
 
-打 tag（`v1.0.0` 这样）推上来，GitHub Actions 会在 Windows runner 上自动构建、
-跑一遍自检（认日志里的 `selftest ok`）、通过后才把 exe 打包发到 Releases。
+打 tag（`v1.1.0` 这样）推上来，GitHub Actions 会在 Windows runner 上同时构建两版：
+Python 版打成 `MuMuShot.zip`，Rust 版编译出 `MuMuShot-Rust.exe`，一起发到 Releases。
+Python 版发布前会跑一遍自检（认日志里的 `selftest ok`），不过就不发布。
 
 ## 目录
 
