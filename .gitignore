@@ -4,6 +4,7 @@ __pycache__/
 
 # 打包产物
 build/
+build_dir/
 dist/
 dist_dir/
 *.spec
@@ -31,9 +32,9 @@ venv/
 .idea/
 
 # 本地自用文件，不属于本项目
-mumu_selfie.py
-mumu-selfie.bat
-tools/selfie.ico
-tools/selfie.png
-tools/_split_core.py
-tools/_check_names.py
+python/mumu_selfie.py
+python/mumu-selfie.bat
+python/tools/selfie.ico
+python/tools/selfie.png
+python/tools/_split_core.py
+python/tools/_check_names.py

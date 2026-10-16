@@ -43,13 +43,13 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --clean --onedir --noconsole
           --name MuMuShot
-          --icon tools/shot.ico
+          --icon python/tools/shot.ico
           --exclude-module cv2
           --exclude-module numpy
           --exclude-module matplotlib
           --exclude-module scipy
           --exclude-module pandas
-          mumu_shot.py
+          python/mumu_shot.py
 
       - name: 冒烟测试（确认打出来的 exe 真的能跑）
         shell: pwsh

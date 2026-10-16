@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="tools/shot.png" width="110" alt="MuMuShot">
+  <img src="python/tools/shot.png" width="110" alt="MuMuShot">
   <h1>MuMuShot</h1>
   <p>把电脑屏幕截下来，一键送进 MuMu 模拟器的相册</p>
 </div>
@@ -39,6 +39,7 @@ flowchart LR
 需要 Python 3.10+（要带 tkinter）和 Pillow：
 
 ```bash
+cd python
 pip install pillow
 python mumu_shot.py
 ```
@@ -54,7 +55,7 @@ python mumu_shot.py
 | `Ctrl + Alt + S` | 全屏截图上传 |
 | `Ctrl + Alt + C` | 上传剪贴板里当前的图片 |
 
-命令行也全部支持，可以直接做快捷方式：
+命令行也全部支持，可以直接做快捷方式（下面命令都在 `python/` 目录下执行）：
 
 ```bash
 python mumu_shot.py --full                      # 全屏截图上传
@@ -98,21 +99,24 @@ exe 同目录下的 `mumu-tool.log`（UTF-8，记事本直接打开），每次�
 ## 项目结构
 
 ```
-mumu_shot.py          截图工具主程序（热键、面板、四种截图方式）
-mumu_core.py          MuMu 公共能力：adb 自动发现 / 推送 / 媒体库扫描
-tools/
-  make_icons.py       生成图标
-  rebuild_exe.py      一键重新打包成 exe
-  rebuild-exe.bat     Windows 下双击重新打包
-  shot.ico/.png       图标
+python/               Python 版源码
+  mumu_shot.py        截图工具主程序（热键、面板、四种截图方式）
+  mumu_core.py        MuMu 公共能力：adb 自动发现 / 推送 / 媒体库扫描
+  mumu-shot.bat       双击即从源码启动（不用打包）
+  tools/
+    make_icons.py     生成图标
+    rebuild_exe.py    一键重新打包成 exe（产物放回项目根目录）
+    rebuild-exe.bat   Windows 下双击重新打包
+    shot.ico/.png     图标
 rust/                 Rust 重写版（见下）
 docs/性能评测报告.md    Python 版与 Rust 版的性能对比评测
 bench/                评测脚本（耗时 / 内存 / 交互验证）
+MuMuShot.exe          Python 版打包产物，双击运行；旁边的 _internal 必需
 ```
 
 ## Rust 版
 
-`rust/` 是同一功能的 **Rust 重写**，逐行对照 `mumu_shot.py` / `mumu_core.py` 移植：
+`rust/` 是同一功能的 **Rust 重写**，逐行对照 `python/mumu_shot.py` / `python/mumu_core.py` 移植：
 CLI 参数、退出码、日志文案、本机留档命名全部对齐，另外补上了图形面板与全局热键。
 
 ```bash
@@ -140,13 +144,15 @@ cargo build --release      # 产物：rust/target/release/MuMuShot.exe（单文�
 重新打包（改完代码后）：
 
 ```bash
+cd python
 pip install pyinstaller pillow
-python tools/rebuild_exe.py
+python tools/rebuild_exe.py     # 打好的 MuMuShot.exe 会放回项目根目录
 ```
 
 程序自带一个自检入口，会检查依赖是否齐全、目录是否可写、日志能否落盘：
 
 ```bash
+cd python
 python mumu_shot.py --selftest
 ```
 

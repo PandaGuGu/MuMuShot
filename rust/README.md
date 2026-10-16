@@ -2,7 +2,7 @@
 
 截取电脑屏幕 → 通过 adb 一键送进 MuMu 模拟器相册。
 
-本目录是 [`mumu_shot.py`](../mumu_shot.py) / [`mumu_core.py`](../mumu_core.py) 的 **Rust 重写**，
+本目录是 [`python/mumu_shot.py`](../python/mumu_shot.py) / [`python/mumu_core.py`](../python/mumu_core.py) 的 **Rust 重写**，
 逐行对照参考实现移植：功能、CLI 参数、退出码、日志文案、文件命名全部对齐。
 
 ## 它解决什么问题
@@ -116,7 +116,7 @@ rust/
 ├── Cargo.toml
 ├── README.md
 └── src/
-    ├── main.rs      CLI 解析 + 模式分派 + 自检（对应 mumu_shot.py 的 main/run_cli/selftest）
+    ├── main.rs      CLI 解析 + 模式分派 + 自检（对应 python/mumu_shot.py 的 main/run_cli/selftest）
     ├── app.rs       截图→上传统一入口（对应 Uploader）
     ├── adb.rs       设备发现 / adb 推送 / 媒体库索引（对应 mumu_core.py）
     ├── capture.rs   GDI 截图 / 剪贴板 / 窗口枚举 / 系统截图工具
